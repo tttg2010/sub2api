@@ -42,6 +42,10 @@ func ClassifyImageBillingTier(size string) (string, bool) {
 	case "3840x2160", "2160x3840":
 		return ImageBillingSize4K, true
 	}
+	// "4k:16:9" 这类「档位:比例」写法，档位决定计费，比例由网关在出图后补齐。
+	if tier, ok := classifyImageBillingTierPrefix(normalized); ok {
+		return tier, true
+	}
 
 	width, height, ok := parseImageBillingDimensions(trimmed)
 	if !ok {
@@ -59,6 +63,23 @@ func ClassifyImageBillingTier(size string) (string, bool) {
 	default:
 		return ImageBillingSize4K, true
 	}
+}
+
+// classifyImageBillingTierPrefix 识别「档位:比例」写法里的档位前缀。
+func classifyImageBillingTierPrefix(size string) (string, bool) {
+	for _, candidate := range []struct {
+		prefix string
+		tier   string
+	}{
+		{"1k:", ImageBillingSize1K},
+		{"2k:", ImageBillingSize2K},
+		{"4k:", ImageBillingSize4K},
+	} {
+		if strings.HasPrefix(size, candidate.prefix) {
+			return candidate.tier, true
+		}
+	}
+	return "", false
 }
 
 func NormalizeImageBillingTierOrDefault(size string) string {

@@ -1142,6 +1142,10 @@ func (s *OpenAIGatewayService) handleOpenAIImagesStreamingResponse(
 		fallbackBody.Reset()
 		fallbackBytes = 0
 		if direct != nil && strings.HasSuffix(gjson.GetBytes(dataBytes, "type").String(), ".completed") {
+			// codex 直调通道只接受画幅比例，2K / 4K 档在这里补齐后再交给尺寸检测与计费。
+			if resized, changed := resizeCodexImagesEvent(dataBytes, direct); changed {
+				dataBytes = resized
+			}
 			if size := detectOpenAIImageResultSize(gjson.GetBytes(dataBytes, "b64_json").String()); size != "" {
 				dataBytes, _ = sjson.SetBytes(dataBytes, "size", size)
 			}

@@ -73,11 +73,21 @@ func buildOpenAIImagesOAuthPayload(parsed *OpenAIImagesRequest, model string) ([
 		}
 	}
 	payload["prompt"] = prompt
+	// 上游只认比例或像素；"4k:16:9" 这类带档位前缀的写法必须先归一，否则上游退回默认画幅。
+	sizeValue := parsed.Size
+	if normalized, ok := upstreamCodexImageSize(parsed.Size); ok {
+		sizeValue = normalized
+	}
+	// quality 归一成上游认得的四档；无法识别的取值丢弃，避免上游 400。
+	qualityValue := ""
+	if normalized, ok := normalizeCodexImageQuality(parsed.Quality); ok {
+		qualityValue = normalized
+	}
 	for _, field := range []struct {
 		key   string
 		value string
 	}{
-		{"size", parsed.Size}, {"quality", parsed.Quality}, {"complexity", parsed.Complexity},
+		{"size", sizeValue}, {"quality", qualityValue}, {"complexity", parsed.Complexity},
 		{"background", parsed.Background}, {"output_format", parsed.OutputFormat},
 		{"moderation", parsed.Moderation}, {"input_fidelity", parsed.InputFidelity},
 		{"style", parsed.Style},
@@ -244,6 +254,8 @@ func (s *OpenAIGatewayService) handleCodexDirectImagesNonStreamingResponse(resp 
 		}
 		return OpenAIUsage{}, 0, nil, err
 	}
+	// codex 直调通道只接受画幅比例，2K / 4K 档由网关在结果返回前重采样补齐。
+	body, _ = resizeCodexImagesBody(body, parsed)
 	results, err := parseCodexDirectImagesResponse(body)
 	if err != nil {
 		return OpenAIUsage{}, 0, nil, err
