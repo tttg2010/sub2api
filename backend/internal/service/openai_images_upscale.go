@@ -18,8 +18,9 @@ import (
 )
 
 // codex 直调通道只接受画幅比例，实际像素由上游固定（约 1.6K）。网关按请求声明的
-// 档位与比例在结果返回前重新采样，使 2K / 4K 档能拿到对应像素。
+// 档位与比例在结果返回前重新采样，使 1K / 2K / 4K 档都能拿到对应像素。
 const (
+	codexImageLongEdge1K = 1024
 	codexImageLongEdge2K = 2048
 	codexImageLongEdge4K = 3840
 
@@ -71,16 +72,14 @@ type codexImageResizeTarget struct {
 //	16:9            纯比例，按默认 2K 处理
 //	3840x2160       像素，直接作为目标尺寸
 //
-// 1K 档与 auto 返回 false：1K 不做重采样，维持上游原始输出。
+// 1K 档同样重采样（缩到长边 1024），保证 1K 计费档有对应像素可交付；
+// auto / 空值返回 false，维持上游原始输出。
 func resolveCodexImageResizeTarget(size string) (codexImageResizeTarget, bool) {
 	raw := strings.ToLower(strings.TrimSpace(size))
 	if raw == "" || raw == "auto" {
 		return codexImageResizeTarget{}, false
 	}
 	if width, height, ok := parseImageBillingDimensions(raw); ok {
-		if tier, classified := ClassifyImageBillingTier(raw); classified && tier == ImageBillingSize1K {
-			return codexImageResizeTarget{}, false
-		}
 		return codexImageResizeTarget{
 			width:    width &^ 1,
 			height:   height &^ 1,
@@ -97,9 +96,6 @@ func resolveCodexImageResizeTarget(size string) (codexImageResizeTarget, bool) {
 			rest = strings.Trim(strings.TrimSpace(rest), ":")
 			break
 		}
-	}
-	if tier == ImageBillingSize1K {
-		return codexImageResizeTarget{}, false
 	}
 	if tier == "" {
 		aspectW, aspectH, ok := parseImageAspectRatio(raw)
@@ -132,6 +128,8 @@ func codexImageLongEdgeForTier(tier string) int {
 		return codexImageLongEdge4K
 	case ImageBillingSize2K:
 		return codexImageLongEdge2K
+	case ImageBillingSize1K:
+		return codexImageLongEdge1K
 	default:
 		return 0
 	}

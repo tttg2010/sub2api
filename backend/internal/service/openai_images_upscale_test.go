@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"encoding/base64"
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
@@ -67,9 +68,9 @@ func TestResolveCodexImageResizeTarget(t *testing.T) {
 		{size: "9:16", ok: true, longEdge: codexImageDefaultLongEdge, aspectW: 9, aspectH: 16},
 		{size: "3840x2160", ok: true, width: 3840, height: 2160, longEdge: 3840},
 		{size: "2049x2049", ok: true, width: 2048, height: 2048, longEdge: 2049},
-		{size: "1k", ok: false},
-		{size: "1k:1:1", ok: false},
-		{size: "1024x1024", ok: false},
+		{size: "1k", ok: true, longEdge: codexImageLongEdge1K},
+		{size: "1k:1:1", ok: true, longEdge: codexImageLongEdge1K, aspectW: 1, aspectH: 1},
+		{size: "1024x1024", ok: true, width: 1024, height: 1024, longEdge: 1024},
 		{size: "auto", ok: false},
 		{size: "", ok: false},
 		{size: "garbage", ok: false},
@@ -107,6 +108,9 @@ func TestCodexImageResizeTargetPixelSize(t *testing.T) {
 		{codexImageResizeTarget{longEdge: 3840, aspectW: 3, aspectH: 4}, 1672, 941, 2880, 3840, "4k 3:4"},
 		{codexImageResizeTarget{longEdge: 2048, aspectW: 16, aspectH: 9}, 1672, 941, 2048, 1152, "2k 16:9"},
 		{codexImageResizeTarget{longEdge: 2048, aspectW: 1, aspectH: 1}, 1672, 941, 2048, 2048, "2k 1:1"},
+		{codexImageResizeTarget{longEdge: 1024, aspectW: 16, aspectH: 9}, 1672, 941, 1024, 576, "1k 16:9"},
+		{codexImageResizeTarget{longEdge: 1024, aspectW: 1, aspectH: 1}, 1672, 941, 1024, 1024, "1k 1:1"},
+		{codexImageResizeTarget{longEdge: 1024}, 1672, 941, 1024, 576, "1k 跟随源比例"},
 		{codexImageResizeTarget{longEdge: 3840}, 1672, 941, 3840, 2160, "4k 跟随源比例"},
 		{codexImageResizeTarget{width: 4096, height: 2304}, 800, 600, 4096, 2304, "显式像素"},
 	}
@@ -131,6 +135,8 @@ func TestUpstreamCodexImageSize(t *testing.T) {
 		{"3840x2160", "3840x2160", true},
 		{"4k", "", false},
 		{"1k", "", false},
+		{"1024x1024", "1024x1024", true},
+		{"1k:16:9", "16:9", true},
 		{"auto", "", false},
 	}
 	for _, tc := range cases {
@@ -138,6 +144,40 @@ func TestUpstreamCodexImageSize(t *testing.T) {
 		if got != tc.want || ok != tc.ok {
 			t.Errorf("upstreamCodexImageSize(%q) = %q,%v, want %q,%v", tc.size, got, ok, tc.want, tc.ok)
 		}
+	}
+}
+
+func TestResizeCodexImageB64To1K(t *testing.T) {
+	encoded := encodeTestPNG(t, 1672, 941, false)
+	target, ok := resolveCodexImageResizeTarget("1k:16:9")
+	if !ok {
+		t.Fatal("1k:16:9 should be resized")
+	}
+	result, err := resizeCodexImageB64(encoded, target, testEncodeOptions(false))
+	if err != nil {
+		t.Fatalf("resize: %v", err)
+	}
+	if !result.changed {
+		t.Fatal("expected image to be downscaled")
+	}
+	if result.width != 1024 || result.height != 576 {
+		t.Fatalf("got %dx%d, want 1024x576", result.width, result.height)
+	}
+	// 输出尺寸必须真的落在 1K 计费档，否则价格与规格对不上。
+	if tier, ok := ClassifyImageBillingTier(fmt.Sprintf("%dx%d", result.width, result.height)); !ok || tier != ImageBillingSize1K {
+		t.Fatalf("output %dx%d classified as %q,%v, want 1K", result.width, result.height, tier, ok)
+	}
+}
+
+func TestResizeCodexImagesBodyTo1K(t *testing.T) {
+	encoded := encodeTestPNG(t, 1254, 1254, false)
+	body := []byte(`{"data":[{"b64_json":"` + encoded + `"}]}`)
+	updated, changed := resizeCodexImagesBody(body, &OpenAIImagesRequest{Size: "1k:1:1"})
+	if !changed {
+		t.Fatal("expected 1k body to be rewritten")
+	}
+	if got := gjson.GetBytes(updated, "data.0.size").String(); got != "1024x1024" {
+		t.Fatalf("data.0.size = %q, want 1024x1024", got)
 	}
 }
 
@@ -249,7 +289,7 @@ func TestResizeCodexImagesBody(t *testing.T) {
 func TestResizeCodexImagesBodySkipsUntouchedRequests(t *testing.T) {
 	encoded := encodeTestPNG(t, 320, 240, false)
 	body := []byte(`{"data":[{"b64_json":"` + encoded + `"}]}`)
-	for _, size := range []string{"1k", "1k:1:1", "1024x1024", "auto", ""} {
+	for _, size := range []string{"auto", ""} {
 		updated, changed := resizeCodexImagesBody(body, &OpenAIImagesRequest{Size: size})
 		if changed {
 			t.Errorf("size %q: expected no rewrite", size)
